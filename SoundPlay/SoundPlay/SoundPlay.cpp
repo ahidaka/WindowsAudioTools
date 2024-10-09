@@ -3,23 +3,20 @@
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <Propsys.h>
-#include <Functiondiscoverykeys_devpkey.h>  // これも追加してください
-
+#include <Functiondiscoverykeys_devpkey.h>
 #include <iostream>
 #include <thread>
 #include <chrono>
 #include <vector>
 
-//#define BUFFER_SIZE 9600  // バッファサイズ
-#define BUFFER_SIZE 19200  // バッファサイズ
+//#define BUFFER_SIZE 9600
+#define BUFFER_SIZE 19200  // Process 10ms audio data
 
 #define REFTIME_PER_MILLICEC (10) 
 
-#define DEBUGP 0
-
 #pragma comment(lib, "Propsys.lib")
 
-// デバイス情報を表示
+// Show device information
 void PrintDeviceInfo(IMMDevice* pDevice) {
     if (pDevice == nullptr) {
         std::cerr << "Device is null" << std::endl;
@@ -42,13 +39,12 @@ void PrintDeviceInfo(IMMDevice* pDevice) {
     }
 
     std::wcout << L"Device Name: " << varName.pwszVal << std::endl;
-    //wprintf(L"Device Name: %ws\n", varName.pwszVal);
 
     PropVariantClear(&varName);
     pProps->Release();
 }
 
-// オーディオストリームの処理
+// Process audio stream
 void HandleAudioStream(IAudioClient* pAudioClientIn, IAudioClient* pAudioClientOut, IAudioCaptureClient* pCaptureClient, IAudioRenderClient* pRenderClient, WAVEFORMATEX* pwfx) {
     BYTE* pData;
     DWORD flags;
@@ -66,7 +62,7 @@ void HandleAudioStream(IAudioClient* pAudioClientIn, IAudioClient* pAudioClientO
     while (true) {
         pCaptureClient->GetNextPacketSize(&packetLength);
         if (packetLength == 0) {
-            // 入力データがないときは少し待機
+			// If no data is available, sleep for a while
             std::this_thread::sleep_for(std::chrono::milliseconds(REFTIME_PER_MILLICEC));
             // Debug note
             std::wcout << L"Sleep 10 for Capture: " << std::endl;
@@ -76,34 +72,15 @@ void HandleAudioStream(IAudioClient* pAudioClientIn, IAudioClient* pAudioClientO
         UINT32 numFramesAvailable;
         pCaptureClient->GetBuffer(&pData, &numFramesAvailable, &flags, nullptr, nullptr);
 
-        // キャプチャされたオーディオをコピー
+		// Copy data to buffer
         memcpy(buffer.data(), pData, numFramesAvailable * pwfx->nBlockAlign);
-#if DEBUGP
-        std::wcout << L"Capture Copied: " << numFramesAvailable * pwfx->nBlockAlign << std::endl;
-#endif
-
         pCaptureClient->ReleaseBuffer(numFramesAvailable);
 
-#if DEBUGP
-		// Debug note
-        std::wcout << L"Captured numFramesAvailable: " << numFramesAvailable
-            << L", pwfx->nBlockAlign: " << pwfx->nBlockAlign
-            << L", total: " << (numFramesAvailable * pwfx->nBlockAlign)
-            << L", packetLength: " << packetLength
-            << std::endl;
-#endif
         while (true) {
             HRESULT hr;
-
-            //UINT32 padding = 0;
-            //hr = pAudioClientOut->GetCurrentPadding(&padding);
-            //if (FAILED(hr)) {
-            //    std::cerr << "Failed to get padding. Error code: " << hr << std::endl;
-            //    return;
-            //}
-
-            //バッファサイズが pwfx->nSamplesPerSec とは異なる場合も考えられるため、GetBufferSize() を使ってバッファサイズを管理
             UINT32 bufferFrameCount = 0;
+            BYTE* pRenderData = nullptr;
+
             hr = pAudioClientOut->GetBufferSize(&bufferFrameCount);
             if (FAILED(hr)) {
                 std::cerr << "Failed to get buffer size. Error code: " << hr << std::endl;
@@ -112,68 +89,24 @@ void HandleAudioStream(IAudioClient* pAudioClientIn, IAudioClient* pAudioClientO
 
             std::wcout << L"numFramesAvailable: " << numFramesAvailable << std::endl;
 
-#if DEBUGP
-			std::wcout << L"padding: " << padding
-                << L", bufferFrameCount: " << bufferFrameCount
-                << L", pwfx->nSamplesPerSec: " << pwfx->nSamplesPerSec
-                << std::endl;
-#endif
-            // UINT32 numFramesPadding = bufferFrameCount - padding;
-
-            if (TRUE /*numFramesPadding > 0*/) {
-                BYTE* pRenderData = nullptr;
-
-#if 0
-                UINT32 numFramesPadding = numFramesAvailable;
-                //hr = pRenderClient->GetBuffer(numFramesPadding, &pRenderData);
-                //if (FAILED(hr)) {
-                //    std::cerr << "Failed to get render buffer. Error code: " << hr << std::endl;
-                //    return;
-                //}
-#endif
-#if 1
-                /////////////////////////////////////
-                hr = pRenderClient->GetBuffer(numFramesAvailable, &pRenderData);
-                if (FAILED(hr)) {
-                    std::cerr << "Failed to get render buffer. Error code: " << hr << std::endl;
-                    return;
-                }
-                if (pRenderData == nullptr) {
-                    std::cerr << "Render data buffer is null." << std::endl;
-                    return;
-                }
-#endif
-                // バッファにデータを書き込む
-                //memcpy(pRenderData, buffer.data(), numFramesPadding * pwfx->nBlockAlign);
-                memcpy(pRenderData, buffer.data(), numFramesAvailable * pwfx->nBlockAlign);
-
-#if DEBUGP
-				// Debug note
-                std::wcout << L"Writing buffer: " << numFramesPadding
-                    << L", bufferFrameCount: " << bufferFrameCount
-                    << L", padding: " << padding
-                    << L", total: " << (bufferFrameCount * padding)
-                    << std::endl;
-#endif
-                // バッファを解放する
-#if 1
-//                hr = pRenderClient->ReleaseBuffer(numFramesPadding, 0);
-                hr = pRenderClient->ReleaseBuffer(numFramesAvailable, 0);
-                if (FAILED(hr)) {
-                    std::cerr << "Failed to release render buffer. Error code: " << hr << std::endl;
-                    return;
-                }
-#endif
-				break;
+            hr = pRenderClient->GetBuffer(numFramesAvailable, &pRenderData);
+            if (FAILED(hr)) {
+                std::cerr << "Failed to get render buffer. Error code: " << hr << std::endl;
+                return;
             }
-            else {
-                // バッファが空くのを待機
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                // Debug note
-#if DEBUGP
-                std::wcout << L"Sleep 10 for wait: " << std::endl;
-#endif
+            if (pRenderData == nullptr) {
+                std::cerr << "Render data buffer is null." << std::endl;
+                return;
             }
+			// Write data to render buffer
+            memcpy(pRenderData, buffer.data(), numFramesAvailable * pwfx->nBlockAlign);
+
+            hr = pRenderClient->ReleaseBuffer(numFramesAvailable, 0);
+            if (FAILED(hr)) {
+                std::cerr << "Failed to release render buffer. Error code: " << hr << std::endl;
+                return;
+            }
+			break;
         }
     }
 
@@ -182,8 +115,6 @@ void HandleAudioStream(IAudioClient* pAudioClientIn, IAudioClient* pAudioClientO
 }
 
 HRESULT StartAudioProcessing() {
-    //CoInitialize(nullptr);
-
     IMMDeviceEnumerator* pEnumerator = nullptr;
     IMMDevice* pDeviceIn = nullptr;
     IMMDevice* pDeviceOut = nullptr;
@@ -214,14 +145,14 @@ HRESULT StartAudioProcessing() {
 
     PrintDeviceInfo(pDeviceIn);
 
-    // 入力オーディオクライアントの取得
+	// Get input audio client
     hr = pDeviceIn->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&pAudioClientIn);
     if (FAILED(hr)) {
         std::cerr << "Failed to activate input audio client. Error code: " << hr << std::endl;
         return hr;
     }
 
-    // 出力デバイスの取得
+	// Get output device
     hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &pDeviceOut);
     if (FAILED(hr)) {
         std::cerr << "Failed to get default audio render device. Error code: " << hr << std::endl;
@@ -230,14 +161,14 @@ HRESULT StartAudioProcessing() {
 
     PrintDeviceInfo(pDeviceOut);
 
-    // 出力オーディオクライアントの取得
+	// Get output audio client
     hr = pDeviceOut->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&pAudioClientOut);
     if (FAILED(hr)) {
         std::cerr << "Failed to activate output audio client. Error code: " << hr << std::endl;
         return hr;
     }
 
-    // ミックスフォーマットの取得
+	// Get mix format
     WAVEFORMATEX* pwfx = nullptr;
     hr = pAudioClientIn->GetMixFormat(&pwfx);
     if (FAILED(hr)) {
@@ -245,7 +176,7 @@ HRESULT StartAudioProcessing() {
         return hr;
     }
 
-    // フォーマットサポートの確認
+	// Check if input format is supported
     WAVEFORMATEX* closestMatch = nullptr;
     hr = pAudioClientIn->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, pwfx, &closestMatch);
     if (hr == S_FALSE) {
@@ -257,7 +188,7 @@ HRESULT StartAudioProcessing() {
         return hr;
     }
 
-    // 入力デバイスの初期化
+	// Initialize audio clients
     hr = pAudioClientIn->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, pwfx, nullptr);
     if (FAILED(hr)) {
         std::cerr << "Failed to initialize input audio client. Error code: " << hr << std::endl;
@@ -282,14 +213,14 @@ HRESULT StartAudioProcessing() {
         return hr;
     }
 
-    // デバイス情報表示
+	// Show audio format
     std::wcout << L"Channels: " << pwfx->nChannels << std::endl;
     std::wcout << L"Sample Rate: " << pwfx->nSamplesPerSec << std::endl;
     std::wcout << L"Bits Per Sample: " << pwfx->wBitsPerSample << std::endl;
 
     HandleAudioStream(pAudioClientIn, pAudioClientOut, pCaptureClient, pRenderClient, pwfx);
 
-    // 後処理
+	// Free resources
     pCaptureClient->Release();
     pRenderClient->Release();
     pAudioClientIn->Release();
@@ -302,7 +233,7 @@ HRESULT StartAudioProcessing() {
 	return S_OK;
 }
 
-// エントリーポイント
+// Entry point
 int main() {
     setlocale(LC_ALL, "Japanese");
 
